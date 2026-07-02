@@ -32,7 +32,14 @@ from typing import Any
 
 _GLOBAL_DEFAULTS: dict[str, Any] = {
     "tool_progress": "all",
+    "tool_progress_grouping": "accumulate",  # "accumulate" = edit one bubble; "separate" = one msg per tool
     "show_reasoning": False,
+    # How a reasoning/thinking summary is rendered when show_reasoning is on.
+    #   "code"      -> 💭 **Reasoning:** + fenced code block (legacy default)
+    #   "blockquote"-> each line prefixed with "> "
+    #   "subtext"   -> each line prefixed with "-# " (Discord small grey subtext)
+    # Discord defaults to "subtext"; everywhere else defaults to "code".
+    "reasoning_style": "code",
     "tool_preview_length": 0,
     "streaming": None,  # None = follow top-level streaming config
     # Gateway-only assistant/status chatter controls. These default on for
@@ -40,7 +47,7 @@ _GLOBAL_DEFAULTS: dict[str, Any] = {
     "interim_assistant_messages": True,
     "long_running_notifications": True,
     "busy_ack_detail": True,
-    # When true, delete tool-progress / "Still working..." / status bubbles
+    # When true, delete tool-progress / "⏳ Working — N min" / status bubbles
     # after the final response lands on platforms that support message
     # deletion (e.g. Telegram). Off by default — progress is still shown
     # live, just cleaned up after success so the chat doesn't fill up with
@@ -98,17 +105,22 @@ _TIER_MINIMAL = {
 
 _PLATFORM_DEFAULTS: dict[str, dict[str, Any]] = {
     # Tier 1 — full edit support, personal/team use
-    # Telegram is usually a mobile inbox: default to final-answer-first and
-    # avoid permanent operational breadcrumbs unless users opt back in with
-    # display.platforms.telegram.tool_progress / long_running_notifications.
+    # Telegram is usually a mobile inbox: keep tool_progress quiet and skip
+    # the verbose busy-ack iteration counter, but DO surface real mid-turn
+    # assistant commentary (interim_assistant_messages) and DO send periodic
+    # heartbeats (long_running_notifications) so the user has signal between
+    # turn start and final answer. Otherwise it looks like "typing..." for
+    # 30 minutes with nothing happening. Opt in to verbose iteration detail
+    # via display.platforms.telegram.busy_ack_detail / tool_progress.
     "telegram":    {
         **_TIER_HIGH,
         "tool_progress": "off",
-        "interim_assistant_messages": False,
-        "long_running_notifications": False,
         "busy_ack_detail": False,
     },
-    "discord":     _TIER_HIGH,
+    # Discord has a native "subtext" primitive (-# small grey text) that reads
+    # as metadata rather than content, so reasoning summaries default to it
+    # here instead of the fenced code block used elsewhere.
+    "discord":     {**_TIER_HIGH, "reasoning_style": "subtext"},
 
     # Tier 2 — edit support, often customer/workspace channels
     # Slack: tool_progress off by default — Bolt posts cannot be edited like CLI;
@@ -121,6 +133,12 @@ _PLATFORM_DEFAULTS: dict[str, dict[str, Any]] = {
     # Tier 3 — no edit support, progress messages are permanent
     "signal":          _TIER_LOW,
     "whatsapp":        _TIER_MEDIUM,  # Baileys bridge supports /edit
+    # WhatsApp Cloud API: Meta added message editing in 2023 but the
+    # Hermes Cloud adapter doesn't implement edit_message yet, so we
+    # stay on TIER_LOW (tool_progress off) to avoid spamming each
+    # status update as a separate message. Promote to TIER_MEDIUM once
+    # Cloud's edit_message lands.
+    "whatsapp_cloud":  _TIER_LOW,
     "bluebubbles":     _TIER_LOW,
     "weixin":          _TIER_LOW,
     "wecom":           _TIER_LOW,
@@ -230,6 +248,12 @@ def _normalise(setting: str, value: Any) -> Any:
         if isinstance(value, str):
             return value.lower() in {"true", "1", "yes", "on"}
         return bool(value)
+    if setting == "tool_progress_grouping":
+        val = str(value).lower()
+        return val if val in ("accumulate", "separate") else "accumulate"
+    if setting == "reasoning_style":
+        val = str(value).lower()
+        return val if val in ("code", "blockquote", "subtext") else "code"
     if setting == "tool_preview_length":
         try:
             return int(value)
